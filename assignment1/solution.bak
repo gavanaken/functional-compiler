@@ -1,0 +1,108 @@
+#lang racket
+
+
+;; A church-compiler
+(provide churchify
+         church-encode)
+
+;; for an input language:
+;
+; e ::= (letrec ([x (lambda (x ...) e)]) e)    
+;     | (let ([x e] ...) e)  
+;     | (lambda (x ...) e)
+;     | (e e ...)    
+;     | x  
+;     | (and e e) | (or e e)
+;     | (if e e e)
+;     | (uprim e) | (bprim e e)
+;     | datum
+; datum ::= nat | (quote ()) | #t | #f 
+; nat ::= 0 | 1 | 2 | ... 
+; x is a symbol
+; uprim/bprim is a primitive operation in:
+(define prims '(+ * cons add1 car cdr null? not))
+
+;; To an output language:
+;
+; e ::= (lambda (x) e)
+;     | (e e)
+;     | x
+;
+
+
+(define (prim? prim)
+  (if (member prim prims) #t #f))
+
+
+(define (churchify-prim prim)
+  (string->symbol (string-append "church:" (symbol->string prim))))
+
+
+(define (churchify e)
+  (match e
+         ; Tagged expressions
+         [`(letrec ([,f (lambda (,args ...) ,e0)]) ,e1)
+          'blank]
+
+         [`(let ([,xs ,e0s] ...) ,e1)
+          'blank]
+
+         [`(lambda () ,e0)
+          'blank]
+         [`(lambda (,x) ,e0)
+          'blank]
+         [`(lambda (,x . ,rest) ,e0)
+          'blank]
+         
+         [(? symbol? x)
+          'blank]
+
+         [`(and ,e0 ,e1)
+          (lambda (e0) (lambda (e1) (e0 e1 (churchify #f))))]
+
+         [`(or ,e0 ,e1)
+          (lambda (e0) (lambda (e1) (e0 (churchify #t) e1)))]
+
+         [`(if ,e0 ,e1 ,e2)
+          ((churchify e0) e1 e2)]
+
+         [`(,(? prim? prim) . ,args)
+          'blank]
+
+         ; Datums
+         [(? natural? nat)
+          (lambda (f) (lambda (y) (f (nat f y))))]
+         ['(quote ())
+          'blank]
+         [#t
+          (lambda (a) (lambda (b) a))]
+         [#f
+          (lambda (a) (lambda (b) b))]
+
+         ; Untagged application
+         [`(,fun)
+          'blank]
+         [`(,fun ,arg)
+          'blank]
+         [`(,fun ,arg . ,rest)
+          'blank]))
+
+
+(define (church-encode e)
+  (define Y-comb `((lambda (u) (u u)) (lambda (y) (lambda (mk) (mk (lambda (x) (((y y) mk) x)))))))
+  ; define church-null? etc. here
+  
+  (churchify
+   `(let ([Y-comb ,Y-comb]
+         ;[church:null? ,church-null?]
+         ;[church:cons ,church-cons]
+         ;[church:car ,church-car]
+         ;[church:cdr ,church-cdr]
+         ;[church:add1 ,church-add1]
+         ;[church:+ ,church-+]
+         ;[church:* ,church-*]
+         ;[church:not ,church-not]
+         )
+      ,e)))
+
+
