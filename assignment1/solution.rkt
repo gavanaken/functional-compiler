@@ -45,7 +45,7 @@
           'blank]
 
          [`(let ([,xs ,e0s] ...) ,e1)
-          'blank] ; Is this right??
+          (churchify `(lambda (,xs ,e1) ,e0s))] ; Is this right??
 
          [`(lambda () ,e0)
           `(lambda (_) ,(churchify e0))]
