@@ -42,10 +42,11 @@
   (match e
          ; Tagged expressions
          [`(letrec ([,f (lambda (,args ...) ,e0)]) ,e1)
-          'blank]
+          (churchify `(let ([,f (Y-comb (lambda (,f) (lambda ,args ,e0)))]) ,e1))] ; with help from http://matt.might.net/articles/compiling-up-to-lambda-calculus/
+                                                                                   ; each subpiece can be handled by churchify
 
          [`(let ([,xs ,e0s] ...) ,e1)
-          (churchify `(lambda (,xs ,e1) ,e0s))] ; Is this right??
+          (churchify `((lambda ,xs ,e1) . ,e0s))] ; Is this right??
 
          [`(lambda () ,e0)
           `(lambda (_) ,(churchify e0))]
@@ -71,34 +72,39 @@
 
          ; Datums
          [(? natural? nat)
-          'blank] ;apply f(x) <nat> times!??
-         ['(quote ())
-          'blank]
+          (define (apply-n nat)
+            (cond
+              [(= nat 0) 'x]
+              [else `(f ,(apply-n (- nat 1)))]
+              ))
+          (churchify `(lambda (f) (lambda (x) ,(apply-n nat))))]
+         ['(quote ()) 
+          (churchify `(lambda (when-cons) (lambda (when-null) (when null))))] ;null this time
          [#t
-          (churchify `(lambda (a b) (a)))] ; given 2 options, pick the first
+          (churchify `(lambda (tt ft) (tt)))] ; given 2 options, pick the first
          [#f
-          (churchify `(lambda (a b) (b)))] ; ... pick the second
+          (churchify `(lambda (tt ft) (ft)))] ; ... pick the second
 
          ; Untagged application
          [`(,fun)
-          'blank]
+          (churchify `(,fun (lambda (_) _)))] ; fun applied to a blank lambda
          [`(,fun ,arg)
-          'blank]
+          `(,(churchify fun) ,(churchify arg))]
          [`(,fun ,arg . ,rest)
-          'blank]))
+          (churchify `((,fun ,arg) . ,rest))]))
 
 
 (define (church-encode e)
   (define Y-comb `((lambda (u) (u u)) (lambda (y) (lambda (mk) (mk (lambda (x) (((y y) mk) x)))))))
   ; define church-null? etc. here
-  (define church-null? `(lambda (when-cons when-null) (when-null))) ; from asgnt
-  (define church-cons `(lambda (a b) (lambda (when-cons when-null) (when-cons a b)))) ; from asgnt
-  (define church-car `(lambda (p) (p (lambda (a b) a) (lambda () omega)))) ; from asgnt
-  (define church-cdr `(lambda (p) (p (lambda (a b) b) (lambda () omega)))) ; from asgnt
-  (define church-add1 `(lambda (n0) (lambda (f) (lambda (x) (f ((n0 f) x)))))) ; from asgnt
+  (define church-null? `(lambda (p) ((p (lambda (_) (lambda (_) #f))) (lambda (_) #t)))) ; with help from http://matt.might.net/articles/compiling-up-to-lambda-calculus/
+  (define church-cons `(lambda (a b) (lambda (when-cons) (lambda (when-null) (when-cons a b))))) ; from asgnt
+  (define church-car `(lambda (p) (p (lambda (a b) a) (lambda () (lambda (x) x))))) ; from asgnt
+  (define church-cdr `(lambda (p) (p (lambda (a b) b) (lambda () (lambda (x) x))))) ; from asgnt
+  (define church-add1 `(lambda (n0) (lambda (f x) (f ((n0 f) x))))) ; from asgnt
   (define church-+ `(lambda (n0 n1) (lambda (f x) ((n1 f) ((n0 f) x))))) ; Assuming natural numbers work right: n0 times of f, then n1 times of f
   (define church-* `(lambda (n0 n1) (lambda (f x) ((n0 (n1 f)) x)))) ; from asgnt: (n1 times of f) n0 times
-  (define church-not `((lambda (b) (if b #f #t)))) ; given a bool, if true go false, else true
+  (define church-not `(lambda (b) (if b #f #t))) ; given a bool, if true go false, else true
   
   (churchify
    `(let ([Y-comb ,Y-comb]
