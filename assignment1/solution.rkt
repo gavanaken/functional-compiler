@@ -78,10 +78,10 @@
               [else `(f ,(apply-n (- nat 1)))]
               ))
           (churchify `(lambda (f) (lambda (x) ,(apply-n nat))))]
-         ['(quote ()) 
-          (churchify `(lambda (when-cons) (lambda (when-null) (when null))))] ;null this time
+         [''()
+          (churchify `(lambda (when-cons when-null) (when-null)))] ;null this time
          [#t
-          (churchify `(lambda (tt ft) (tt)))] ; given 2 options, pick the first
+          (churchify `(lambda (tt ft) (tt)))] ; given 2 options, pick the first, match tt and ft from example
          [#f
           (churchify `(lambda (tt ft) (ft)))] ; ... pick the second
 
