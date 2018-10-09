@@ -47,6 +47,25 @@
          [`(or ,e0 ,es ...)
           (desugar-aux
            `(if ,e0 `#t (or . ,es)))]
+
+         [`(set! ,x ,e0)
+          `(set! ,x ,(desugar-aux e0))]
+
+         [`(apply ,e0 ,e1)
+          `(apply ,(desugar-aux e0) ,(desugar-aux e1))]
+
+         [`(when ,e0 ,e1)
+          (desugar-aux `(if ,e0 ,e1 (void)))]   ; void if false, otherwise do it
+         [`(unless ,e0 ,e1)
+          (desugar-aux `(if (not ,e0) ,e1 (void)))]   ; the opposite now
+
+         [`(cond) `(prim void)]
+         [`(cond [else ,e0])
+          (desugar-aux e0)]
+         [`(cond [,e0] . ,rest) "not sure"]     ; COME BACK HERE: evaluate last then-body
+         [`(cond [,e0 ,e1] . ,rest)
+          (desugar-aux `(if ,e0 ,e1 (cond . ,rest)))] ; recursive here, just branch if true (relies on the above being right)
+    
     
          [else '()]))
 
