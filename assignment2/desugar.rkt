@@ -23,8 +23,10 @@
           (desugar-aux `(let ([,x ,e0]) ,e1))]
          [`(let* ([,x ,e0] . ,rest) ,e1)
           (desugar-aux `(let ([,x ,e0]) (let* ,rest ,e1)))]
-         [`(let ,(? symbol? lp) ([,xs ,es] ...) ,e0)
+         [`(let ,lp ([,xs ,es] ...) ,e0)
           (desugar-aux `(letrec ([,lp (lambda ,xs ,e0)]) (,lp . ,es)))]
+         [`(let ([,xs ,es] ...) ,e0)
+          `(let `(,x ,(map (lambda (e) (desugar-aux e)) es)) ,(desugar-aux e0))]   ; I think this is right?
 
          [`(,(? prim? op) ,es ...) ; this is a list of es? so we need to map over them
           `(prim ,op . ,(map desugar-aux es))]
@@ -52,7 +54,7 @@
           `(set! ,x ,(desugar-aux e0))]
 
          [`(apply ,e0 ,e1)
-          `(apply ,(desugar-aux e0) ,(desugar-aux e1))]
+          `(apply ,(desugar-aux e0) ,(desugar-aux e1))] ; in both langs, desugar args
 
          [`(when ,e0 ,e1)
           (desugar-aux `(if ,e0 ,e1 (void)))]   ; void if false, otherwise do it
@@ -65,7 +67,48 @@
          [`(cond [,e0] . ,rest) "not sure"]     ; COME BACK HERE: evaluate last then-body
          [`(cond [,e0 ,e1] . ,rest)
           (desugar-aux `(if ,e0 ,e1 (cond . ,rest)))] ; recursive here, just branch if true (relies on the above being right)
+
+         [`(let/cc ,x ,e0)
+          (desugar-aux `(call/cc (lambda (,x) ,e)))]  ; taken from the documentation for this - depends on call/cc
+
+         [`(case ,x) `(prim void)]
+         [`(case ,x [else ,e0])
+          (desugar-aux e0)]     ; Only one action - do it (base case)
+         [`(case ,x [(,a ...) ,e0] . ,rest)
+          (desugar-aux `(if (memv ,x `,a)
+                            ,e0                     ; x is contained in a0
+                            (case ,x . ,rest)))]    ; x is not contained in a0, "check" the rest
+
+
+         [`(begin ,e0) (desugar-aux e0)]
+         [`(begin ,e0 . ,rest)
+          "not sure"]   ; similar to cond I think? begin:=go and do stuff and finish at last action
     
+         [`(call/cc ,e0)
+          "not sure"]
+
+         [`(dynamic-wind ,e0 ,e1 ,e2)
+          "not sure"]
+
+         [`(guard (,x ,clause ...) ,e0)
+          "not sure"]
+
+         [`(raise ,e0)
+          "not sure"]     ; what would this even be? desugar the exception?
+    
+         [`(delay ,e0)
+          "not sure"]
+
+         [`(force ,e0)
+          "not sure"]
+
+         [`(letrec* ([,xs ,es] ...) ,e0)
+          "not sure"]
+
+         [`(letrec ([,xs ,es] ...) ,e0)
+          "not sure"]
+
+    ; when are we supposed to use gensym???
     
          [else '()]))
 
