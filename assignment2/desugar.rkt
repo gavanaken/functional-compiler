@@ -64,7 +64,11 @@
          [`(cond) `(prim void)]
          [`(cond [else ,e0])
           (desugar-aux e0)]
-         [`(cond [,e0] . ,rest) "not sure"]     ; COME BACK HERE: evaluate last then-body
+         [`(cond [,e0] . ,rest)
+           (define f (gensym 'cond)) ; we need a new symbol every time
+           (desugar-aux
+           `(let ([,f ,e0])             ; point the symbol variable to the test expr.
+              (if ,f ,f (cond . ,rest))))]     ; then go ahead and rcurse if needed
          [`(cond [,e0 ,e1] . ,rest)
           (desugar-aux `(if ,e0 ,e1 (cond . ,rest)))] ; recursive here, just branch if true (relies on the above being right)
 
@@ -82,7 +86,9 @@
 
          [`(begin ,e0) (desugar-aux e0)]
          [`(begin ,e0 . ,rest)
-          "not sure"]   ; similar to cond I think? begin:=go and do stuff and finish at last action
+          (desugar-aux
+           `(let ([exp ,e0])    ; have desugar run the evalution
+              (begin . ,rest)))]   ; then recurse on everything else
     
          [`(call/cc ,e0)
           "not sure"]
@@ -94,21 +100,37 @@
           "not sure"]
 
          [`(raise ,e0)
-          "not sure"]     ; what would this even be? desugar the exception?
+          `(string-append "uncaught exception: " (desugar-aux ,e0))] ; this probably isn't right
     
          [`(delay ,e0)
-          "not sure"]
+          (desugar-aux
+           `(list (lambda () ,e0) (mcons '#f '#f)))]
 
          [`(force ,e0)
-          "not sure"]
+          (define p (gensym 'promise))
+          (desugar-aux
+           `(let* ([,p ,e0]
+                   [pair (last ,p)])
+              (if (mcar pair)
+                  (mcons pair)
+                  (let ([exp (first ,p)])
+                    (begin (set-mcar! (last ,p) '#t)
+                           (set-mcdr! (last ,p) exp)
+                           exp)))))]
 
          [`(letrec* ([,xs ,es] ...) ,e0)
           "not sure"]
 
          [`(letrec ([,xs ,es] ...) ,e0)
-          "not sure"]
-
-    ; when are we supposed to use gensym???
+          (define fs (map gensym xs)) ; need discrete identifiers
+          `(let ,(map (lambda (x e) `(,x '())) xs es)
+             ,(desugar-aux
+               `(begin
+                 ,@(map (lambda (x f) `(set! ,x ,f)) xs fs)
+                 ,e0)))]
+    
+           ; above with help from http://matt.might.net/articles/desugaring-scheme/
+    
     
          [else '()]))
 
