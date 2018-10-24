@@ -119,7 +119,11 @@
                            exp)))))]
 
          [`(letrec* ([,xs ,es] ...) ,e0)
-          "not sure"]
+          `(let ,(map (lambda (x e) `(,x '())) xs es) ; turn everything into lambdas 
+             ,(desugar-aux ; need to desugar everything that follows
+               `(begin ; map a set over each thing and execute e0 (from notes)
+                  ,@(map (lambda (x e) `(set! ,x ,e)) xs es)
+                  ,e0)))]
 
          [`(letrec ([,xs ,es] ...) ,e0)
           (define fs (map gensym xs)) ; need discrete identifiers
