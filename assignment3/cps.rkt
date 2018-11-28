@@ -40,17 +40,16 @@
 
            [`(let ([,xs ,es] ...) ,e0)
             `(let ,(map (lambda (x e)
-                          (if (memv x mutated-vars)
-                              `(,x (prim make-vector '1 ,(boxify e)))
-                              `(,x ,(boxify e))))xs es) ; map making a vector over anything that needs it - recurse on e's
+                          `(,x (prim make-vector '1 ,(boxify e)))
+                          `(,x ,(boxify e)))xs es) ; map making a vector over anything that needs it - recurse on e's
                ,(boxify e0))] ; finally, recurse on the let body
            [`(lambda ,x ,e0)
             `(lambda ,x
-               ,(if (memv x mutated-vars)
-                    `(let ([,x (prim make-vector '1 ,x)]) ,(boxify e0)) ; make a vector out of the vars - recurse on e's
-                    (boxify e0)))] ; finally, recurse on the lambda body
+            `(let ([,x (prim make-vector '1 ,x)]) ,(boxify e0)) ; make a vector out of the vars - recurse on e's
+               (boxify e0))] ; finally, recurse on the lambda body
            [`(lambda (,x ...) ,e)
-            "not sure"]
+            `(let ,(map (lambda (x) `(,x (prim make-vector '1 ,x))) x)
+               ,(boxify e))]
            [`(apply ,e0 ,e1)
             `(apply ,(boxify e0)
                     ,(boxify e1))] ; just box the e's
@@ -69,9 +68,8 @@
            [`(call/cc ,e0)
             `(call/cc ,(boxify e0))] ; just box e0
            [(? symbol? x)
-            (if (set-member? mutated-vars x)
-                `(prim vector-ref ,x '0)
-                x)]
+            `(prim vector-ref ,x '0)
+                x]
            [`',dat `',dat] ; dat is dat
            ))
   (boxify e))
@@ -107,23 +105,77 @@
            [`(let ([,xs ,es] ...) ,e0)
             (define xs+ (map gensym xs))
             (define env+ (foldl (lambda (x x+ env) (hash-set env x x+)) env xs xs+))
-            "what is rest"]
+            `(let ,(map list xs+ (map (rename env) es)) ; I think this is right? pointing all the renamed xs to all the renamed es
+               ,((rename env+) e0))] ; then recurse with the extended environment and whatever e0 is
            [`(lambda ,x ,e0)
             (define x+ (gensym x))
             (define env+ (hash-set env x x+))
             `(lambda ,x+ ,((rename env+) e0))]
            [`(prim ,op ,es ...)
             `(prim ,op ,@(map (rename env) es))] ; splice together mapping rename over the e's
+           [`(apply ,e0 ,e1)
+            `(apply ,((rename env) e0)
+                    ,((rename env) e1))]
+           [`(apply-prim ,op ,e0)
+            `(apply-prim ,op ,((rename env) e0))]
+           [`(if ,e0, e1, e2)
+            `(if ,((rename env) e0)
+                 ,((rename env) e1)
+                 ,((rename env) e2))]
+           [`(call/cc ,e0)
+            `(call/cc ,((rename env) e0))]
+           [(? symbol? x)
+            (hash-ref env x)] ; just pull it out
+           [`',dat `',dat] ; dat is dat
            ))
   ((rename (hash)) e))
 
 
 ; Converts to ANF; adapted from Flanagan et al.
 (define (anf-convert e)
+  (define (normalize-ae e k)
+    (normalize e (lambda (anf)
+                   (match anf
+                     [(? symbol? x)
+                      (k x)]
+                     [`(lambda ,xs ,e0)
+                      (k `(lambda ,xs ,e0))]
+                     [else
+                      (define ax (gensym 'a))
+                      `(let ([,ax ,anf])
+                         ,(k ax))]))))
+  (define (normalize-aes es k)
+    (if (null? es)
+        (k '())
+        (normalize-ae (car es) (lambda (ae)
+                                 (normalize-aes (cdr es)
+                                                (lambda (aes)
+                                                  (k `(,ae ,@aes))))))))
   (define (normalize e k)
-    '())
-  ; We will write a simplified version in class
-  (normalize e (lambda (x) x)))
+    (match e
+      [(? symbol? x)
+       (k x)]
+      [(`',dat (k `',dat))]
+      [`(lambda (,x) ,e0)
+       (k `(lambda (,x) ,(anf-convert e0)))]
+      [`(if ,e0 ,e1 ,e2)
+       (normalize-ae e0 (lambda (ae)
+                          (k `(if ,ae ,(anf-convert e1) ,(anf-convert e2)))))]
+      [`(,es ...)
+       (normalize-aes es k)]
+      [`(let () ,e0)
+       (normalize e0 k)]
+      [`(let ([,x0 ,x1] . ,rest) ,e0)
+       (k `(let ([,x0 ,(anf-convert x1)]) ; call k to bind but anf-convert x1 first
+             ,(anf-convert
+               `(let ,rest ,e0))))] ; recurse
+      [`(apply ,aes ...)
+       (normalize-aes aes (lambda (x) (k `(apply . ,x))))] ; is this right? need to deal with arbitrary argument #
+      [`(prim ,op ,ae ...)
+       (normalize-aes ae (lambda (x) (k `(prim ,op . ,x))))] ; same
+      [`(apply-prim ,op ,e0)
+       (normalize-ae e0 (lambda (x) (k `(apply-prim ,op ,x))))]
+      (normalize e (lambda (x) x))))
 
 
 ; anf-convert =>
@@ -143,13 +195,27 @@
 
 
 (define (cps-convert e)
-  (define (T e cae)
-    '())
-  ; We will define a simpler version of this in class.
-  ; You can add T and T-ae functions here.
-
-  ; Kick it off with an initial continuation (lambda (k x) ..)
-  ; Its continuation k is never used because first the prim halt is applied on x.
+  (define (T-ae ae)
+    (match ae
+      [(? symbol? x) x]
+      [`(lambda (,x) ,e0)
+       (define k (gensym 'k))
+       `(lambda (,k ,x) ,(T-e e0 k))]
+      
+      [else ae]))
+  (define (T-e e cae)
+    (match e
+      [(? symbol? x)
+       `(,cae ,x ,x)]
+      [`(lambda . ,rest)
+       `(,cae 0 ,(T-ae e))]
+      [`(let ([,x ,e0]) ,e1)
+       (define _x (gensym '_))
+       (T-e e0 `(lambda (,_x ,x) ,(T-e e1 cae)))]
+      [`(if ,ae ,e0 ,e1)
+       `(if ,ae ,(T-e e0 cae) ,(T-e e1 cae))]
+      [`(,aef ,aes ...)
+       `(,(T-ae aef) ,cae ,@(map T-ae aes))]))
   (T e '(lambda (k x) (let ([_1 (prim halt x)]) (k x)))))
 
 
