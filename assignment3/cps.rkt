@@ -155,7 +155,7 @@
     (match e
       [(? symbol? x)
        (k x)]
-      [(`',dat (k `',dat))]
+      [`',dat (k `',dat)]
       [`(lambda (,x) ,e0)
        (k `(lambda (,x) ,(anf-convert e0)))]
       [`(if ,e0 ,e1 ,e2)
@@ -174,8 +174,8 @@
       [`(prim ,op ,ae ...)
        (normalize-aes ae (lambda (x) (k `(prim ,op . ,x))))] ; same
       [`(apply-prim ,op ,e0)
-       (normalize-ae e0 (lambda (x) (k `(apply-prim ,op ,x))))]
-      (normalize e (lambda (x) x))))
+       (normalize-ae e0 (lambda (x) (k `(apply-prim ,op ,x))))]))
+      (normalize e (lambda (x) x)))
 
 
 ; anf-convert =>
@@ -201,7 +201,10 @@
       [`(lambda (,x) ,e0)
        (define k (gensym 'k))
        `(lambda (,k ,x) ,(T-e e0 k))]
-      
+      [`(lambda (,xs ...) ,e0)
+       (define k (gensym 'k))
+       `(lambda (,k ,@xs) ,(T-e e0 k))] ; analogy from before: splice
+      [`',dat `',dat]
       [else ae]))
   (define (T-e e cae)
     (match e
@@ -212,11 +215,30 @@
       [`(let ([,x ,e0]) ,e1)
        (define _x (gensym '_))
        (T-e e0 `(lambda (,_x ,x) ,(T-e e1 cae)))]
+      [`(let ([,x (apply-prim ,op ,ae)]) ,e0)
+       `(let ([,x (apply-prim ,op ,(T-ae ae))]) ,(T-e e0 cae))]
+      [`(let ([,x (prim ,op ,aes ...)]) ,e0)
+       `(let ([,x (prim ,op ,@(map T-ae aes))]) ,(T-e e0 cae))] ; same as above but map over extra args
+      [`(let ([,x (lambda ,xs ,e)]) ,e0)
+       `(let ([,x ,(T-ae `(lambda ,xs ,e))]) ,(T-e e0 cae))]
+      [`(let ([,x ',dat]) ,e0)
+       `(let ([,x ',dat]) (,T-e e0 cae))]
+      [`(prim ,op ,aes ...)
+       (define primk (gensym 'primk))
+       (T-e `(let ([,primk (prim ,op ,@aes)]) ,primk) cae)] ;??
+      [`(apply-prim ,op ,ae)
+       (define primk (gensym 'primk)) (T-e `(let ([,primk (prim ,op, ae)]), primk) cae)]
       [`(if ,ae ,e0 ,e1)
        `(if ,ae ,(T-e e0 cae) ,(T-e e1 cae))]
+      [`(call/cc ,ae)
+       `(,(T-ae ae) ,cae ,cae)] ; just add continuation and pass thru
+      [`(apply ,ae0 ,ae1)
+       (define app (gensym 'app))
+       `(let ([,app (prim cons ,cae ,(T-ae ae1))]) ; basically just add the list to the continuation
+          (apply ,(T-ae ae0) ,app))]
       [`(,aef ,aes ...)
        `(,(T-ae aef) ,cae ,@(map T-ae aes))]))
-  (T e '(lambda (k x) (let ([_1 (prim halt x)]) (k x)))))
+  (T-e e '(lambda (k x) (let ([_1 (prim halt x)]) (k x)))))
 
 
 ; cps-convert => 
