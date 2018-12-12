@@ -92,13 +92,60 @@
           ; case not written
           'remove-varargs-call-sites]))
 
-
 ; call simplify-ae on input to closure convert, then remove vararg callsites/lambdas
 (define (closure-convert cps)
   (define scps (simplify-ae cps))
   (define no-varargs-cps (remove-varargs scps))
+  (define (bottom-up e procs)
+    (match e
+      [`(let ([,x ',dat]) ,e0)
+       (match-define `(,e0+ ,free+ ,procs+)
+                     (bottom-up e0 procs))
+       `((let ([,x ',dat]) ,e0+)
+         ,(set-remove free+ x)
+         ,procs+)]
+      [`(let ([,x (prim ,op ,xs ...)]) ,e0)
+       (match-define `(,e0+ ,free+ ,procs+)
+                     (bottom-up e0 procs))
+       `((let ([,x (prim ,op ,@xs)]) ,e0+)
+         ,(set-remove (set-union free+ (list->set xs)) x)
+         ,procs+)]
+      [`(let ([,x (lambda (,xs ...) ,body)]) ,e0)
+       (match-define `(,e0+ ,free0+ ,procs0+)
+                     (bottom-up e0 procs))
+       (match-define `(,body+ ,freelam+ ,procs1+)
+                     (bottom-up body procs0+))
+       (define env-vars (foldl (lambda (x fr) (set-remove fr x))
+                               freelam+
+                               xs))
+       (define ordered-env-vars (set->list env-vars))
+       (define lamx (gensym 'lam))
+       (define envx (gensym 'env))
+       (define body++ (cdr (foldl (lambda (x count+body)
+                                    (match-define (cons cnt bdy) count+body)
+                                     (cons (+ 1 cnt)
+                                           `(let ([,x (env-ref ,envx ,cnt)])
+                                              ,bdy)))
+                                  (cons 1 body+)
+                                  ordered-env-vars)))
+       `((let ([,x (make-closure ,lamx ,@ordered-env-vars)]) ,e0+)
+         ,(set-remove (set-union free0+ env-vars) x)
+         ((proc (,lamx ,envx ,@xs) ,body++) . ,procs1+))]
+      [`(if ,(? symbol? x) ,e0 ,e1)
+       (match-define `(,e0+ ,free0+ ,procs0+)
+                     (bottom-up e0 procs))
+       (match-define `(,e1+ ,free1+ ,procs1+)
+                     (bottom-up e1 procs0+))
+       `((if ,x ,e0+ ,e1+)
+         ,(set-union free1+ free0+ (set x))
+         ,procs1+)]
+      [`(,(? symbol? xs) ...)
+       `((clo-app ,@xs)
+         ,(list->set xs)
+         ,procs)]))
   ; case not written; see our livecoding from class
-  'perform-bottom-up-closure-conversion)
+  (match-define `(,main-body ,free ,procs) (bottom-up no-varargs-cps '()))
+  `((proc (main) ,main-body) . ,procs))
 
 
 ; Walk procedures and emit llvm code as a string
