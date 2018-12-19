@@ -152,7 +152,42 @@
 ; (string-append "  %r0 = opcode i64 %a, %b \n"
 ;                "  %r1 = ... \n")
 (define (proc->llvm proc)
-  'return-llvm-ir-string)
+  (match proc
+    [`(let ([,x (prim ,op ,xs ...)]) ,e0)
+     (string-append "  %" (c-name x) " = call i64 @" (prim-name op) "( i64 %" (c-name (car xs))
+                    (foldl (lambda (x res) (string-append res ", i64 %" (c-name x))) "" (cdr xs))
+     ")" (string-append "call " (prim-name op) "\n") ; actually call it
+     (proc->llvm e0))]
+    [`(let ([,x (apply-prim ,op ,x0)]) ,e0)
+     (string-append "  %" (c-name x) " call i64 @" (prim-applyname op) "(i64 %" (c-name x0) ")"
+                    (string-append "call " (prim-applyname op) "\n")
+                    (proc->llvm e0))]
+    ; dats ...
+    [`(let ([,x ',(? integer? dat)]) ,e0)
+     (string-append "  %" (c-name x) " = call i64 @const_init_int(i64 " (number->string dat) ")\n")
+     (proc->llvm e0)]
+    ; store i8* getelementptr inbounds ([6 x i8], [6 x i8]* @"??_C@_05CJBACGMB@hello?$AA@", i32 0, i32 0)
+    [`(let ([,x ',(? string? dat)]) ,e0)
+     (define brackets (string-append "[" (number->string (+ 1 (string-length dat))) " x i8]"))
+     (string-append "  %" (c-name x) " = call 164 @const_init_string(i8* getelementptr inbounds (" brackets ", " brackets "* @" (c-name (gensym '??_)) ", i32 0, i32 0))\n")
+     (proc->llvm e0)]
+    [`(let ([,x '#t]) ,e0)
+     (string-append "  %" (c-name x) " = call i64 @const_init_true()\n")
+     (proc->llvm e0)]
+    [`(let ([,x '#f]) ,e0)
+      (string-append "  %" (c-name x) " = call i64 @const_init_false()\n")
+      (proc->llvm e0)]
+
+    [`(if ,x ,e0 ,e1)
+     (define tobool (c-name (gensym 'tobool)))
+     (define if.then (c-name (gensym 'if.then)))
+     (define if.else (c-name (gensym 'if.else)))
+     (string-append "  %" tobool " = trunc i8 %" (c-name x) "to i1\n"
+      "  br i1 %" tobool ", label %" if.then  ", label %" if.else "\n"
+                    "\n" if.then ":\n" (proc->llvm e0)
+                    "\n" if.else ":\n" (proc->llvm e1))]
+    
+   ))
 
 
 
