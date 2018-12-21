@@ -3,7 +3,7 @@
 (require "utils.rkt")
 
 (provide closure-convert
-         proc->llvm)
+         procs->llvm)
 
 
 
@@ -151,16 +151,17 @@
 ; Walk procedures and emit llvm code as a string
 ; (string-append "  %r0 = opcode i64 %a, %b \n"
 ;                "  %r1 = ... \n")
+(define (procs->llvm procs)
+  (define globals "")
 (define (proc->llvm proc)
   (match proc
     [`(let ([,x (prim ,op ,xs ...)]) ,e0)
      (string-append "  %" (c-name x) " = call i64 @" (prim-name op) "( i64 %" (c-name (car xs))
                     (foldl (lambda (x res) (string-append res ", i64 %" (c-name x))) "" (cdr xs))
-     ")" (string-append "call " (prim-name op) "\n") ; actually call it
+     ")\n"
      (proc->llvm e0))]
     [`(let ([,x (apply-prim ,op ,x0)]) ,e0)
-     (string-append "  %" (c-name x) " call i64 @" (prim-applyname op) "(i64 %" (c-name x0) ")"
-                    (string-append "call " (prim-applyname op) "\n")
+     (string-append "  %" (c-name x) " call i64 @" (prim-applyname op) "(i64 %" (c-name x0) ")\n"
                     (proc->llvm e0))]
     ; dats ...
     [`(let ([,x ',(? integer? dat)]) ,e0)
@@ -169,8 +170,21 @@
     ; store i8* getelementptr inbounds ([6 x i8], [6 x i8]* @"??_C@_05CJBACGMB@hello?$AA@", i32 0, i32 0)
     [`(let ([,x ',(? string? dat)]) ,e0)
      (define brackets (string-append "[" (number->string (+ 1 (string-length dat))) " x i8]"))
-     (string-append "  %" (c-name x) " = call 164 @const_init_string(i8* getelementptr inbounds (" brackets ", " brackets "* @" (c-name (gensym '??_)) ", i32 0, i32 0))\n")
+     (define xstring (c-name (gensym 'string)))
+     (set! globals
+                  (string-append globals
+                      "@" xstring " = private unnamed_addr constant "
+                      brackets " c\"" dat "\\00\", align 8\n"))
+     (string-append "  %" (c-name x) " = call 164 @const_init_string(i8* getelementptr inbounds (" brackets ", " brackets "* @" xstring ", i32 0, i32 0))\n")
      (proc->llvm e0)]
+    [`(let ([,x ',(? symbol? dat)]) ,e0)
+     (define xsym (c-name (gensym 'sym)))
+     (define brackets (string-append "[" (number->string (+1 (string-length (symbol->string dat)))) " x i8]"))
+     (set! globals
+                  (string-append globals
+                      "@" xsym " = private unnamed_addr constant "
+                      brackets " c\"" (symbol->string dat) "\\00\", align 8\n"))
+     (string-append "  %" (c-name x) " = call 164 @const_init_string(i8* getelementptr inbounds (" brackets ", " brackets "* @" xsym ", i32 0, i32 0))\n")]
     [`(let ([,x '#t]) ,e0)
      (string-append "  %" (c-name x) " = call i64 @const_init_true()\n")
      (proc->llvm e0)]
@@ -186,8 +200,82 @@
       "  br i1 %" tobool ", label %" if.then  ", label %" if.else "\n"
                     "\n" if.then ":\n" (proc->llvm e0)
                     "\n" if.else ":\n" (proc->llvm e1))]
+
+    [`(let ([,x (make-closure ,lamx ,xs ...)]) ,e0)
+     (define ptrclo (c-name (gensym 'ptrclo)))
+     (define envptrs (map (lambda (x) (c-name (gensym 'envptr))) xs))
+     (define funcptr (c-name (gensym 'fptr)))
+     (define n (match (car (filter (match-lambda [`(proc (,f . ,_) . ,_) (eq? f lamx)]) procs))
+                             [`(proc (,lamx ,ys ...) . ,_) (length ys)]))
+     (define f (c-name (gensym 'f)))
+     (string-append
+      "  %" ptrclo " = call i64* @alloc(i64 " (number->string (* (+ (length xs) 1) 8)) ")\n"
+      (foldr string-append "" (map (lambda (eptr n)
+             "  %" eptr " = getelementptr inbounds i64, i64* %" ptrclo ", i64 " (number->string n) "\n")
+               envptrs (cdr (range (+ 1 (length xs))))))
+      (foldr string-append "" (map (lambda (x eptr)
+               "  store i64 %" (c-name x) ", i64* %" eptr "\n" )
+             xs envptrs))
+      "  %" funcptr " = getelementptr inbounds i64, i64* %" ptrclo ", i64 0\n"
+      "  %" f " = ptrtoint void(i64" (foldr string-append "" (map (lambda (_) ",i64") (range (- n 1))))
+      ")* @" (c-name lamx) " to i64\n"
+      "  store i64 %" f ", i64* %" funcptr "\n"
+      "  %" (c-name x) " = ptrtoint i64* %" ptrclo " to i64\n"
+     (proc->llvm e0))]
+    [`(let ([,x (env-ref ,envx ,cnt)]) ,e0)
+     (define envxptr (c-name (gensym 'envptr)))
+     (define eptr (c-name (gensym 'envptr)))
+     (string-append
+      "  %" envxptr " = inttoptr i64 %" (c-name envx) " to i64*\n"
+      "  %" eptr " = getelementptr inbounds i64, i64* %" envxptr ", i64 " (number->string cnt) "\n"
+      "  %" (c-name x) " = load i64, i64* %" (eptr) ", align 8\n"
+      (proc->llvm e0))]
+    [`(clo-app ,x ,xs ...)
+     (define ptrclo (c-name (gensym 'ptrclo)))
+     (define iptr (c-name (gensym 'iptr)))
+     (define funcptr (c-name (gensym 'funcptr)))
+     (define f (c-name (gensym 'f)))
+     (string-append
+      "  %" ptrclo " = inttpotr i64 %" (c-name x) " to i64*\n"
+      "  %" iptr " = getelementptr inbounds i64, i64* %" ptrclo ", i64 0\n"
+      "  %" f " = load i64, i64* %" iptr ", align 8\n"
+      "  %" funcptr " = inttoptr i64 %" f " to void (i64" (foldl string-append "" (map (lambda (_) ",i64") (range (length xs))))
+      ")*\n"
+      "  musttail call fastcc void %" funcptr "(i64 %" (c-name x) (foldl (lambda (x acc) (string-append acc ", i64 %" (c-name x))) "" xs) ")\n"
+      "  ret void\n")]
     
    ))
+
+  (define (convert-to-llvm proc)
+    (match proc
+           [`(proc (main) ,e)
+            (string-append
+             "define void @proc_main() {\n"
+             (proc->llvm e)
+             "}\n"
+             "\n\n"
+             "define i32 @main() {\n"
+             "  call fastcc void @proc_main()\n"
+             "  ret i32 0\n"
+             "}\n\n")]
+           [`(proc (,lamx ,x0 ,xs ...) ,e0)
+            (string-append
+             "define void @" (symbol->string lamx)
+             "("
+             (foldl (lambda (x args) (string-append args ", i64 %" (c-name x)))
+                    (string-append "i64 %" (c-name x0))
+                    xs)
+             ") {\n"
+             (proc->llvm e0)
+             "}\n")]))
+  
+  (define llvm-procs
+    (apply string-append
+           (map (lambda (s) (string-append s "\n\n"))
+                (map convert-to-llvm procs))))
+  (string-append llvm-procs
+                 "\n\n\n"
+                 globals))
 
 
 
